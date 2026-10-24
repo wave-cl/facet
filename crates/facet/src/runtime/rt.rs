@@ -2,7 +2,7 @@
 //! runner per projection.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use chron_client::{Client, Consistency, ReadOptions, Source};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -36,8 +36,9 @@ pub(crate) struct Shared {
     pub db_id: Uuid,
     pub opts: Arc<RuntimeOptions>,
     pub order: Vec<String>,
-    pub runners: HashMap<String, RunnerLink>,
-    pub tails: Vec<Arc<Tail>>,
+    /// Emptied by `shutdown`, which releases the projection files.
+    pub runners: RwLock<HashMap<String, RunnerLink>>,
+    pub tails: RwLock<Vec<Arc<Tail>>>,
     /// chron's confirmed head, refreshed by the status task.
     pub head: watch::Sender<u64>,
     /// Set when the runtime as a whole cannot go on (the chron database
@@ -199,8 +200,8 @@ impl Runtime {
             db_id,
             opts: opts.clone(),
             order,
-            runners,
-            tails: tails.clone(),
+            runners: RwLock::new(runners),
+            tails: RwLock::new(tails.clone()),
             head: head_tx,
             fatal: fatal_tx,
             cancel: cancel.clone(),
@@ -276,17 +277,19 @@ impl Runtime {
         self.shared.fatal.borrow().clone()
     }
 
-    fn link(&self, name: &str) -> Result<&RunnerLink, RuntimeError> {
+    fn control(&self, name: &str) -> Result<mpsc::Sender<Control>, RuntimeError> {
         self.shared
             .runners
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
             .get(name)
+            .map(|r| r.control.clone())
             .ok_or_else(|| RuntimeError::NoProjection(name.to_owned()))
     }
 
     /// Pauses a projection: it stops applying until resumed.
     pub async fn pause(&self, name: &str) -> Result<(), RuntimeError> {
-        self.link(name)?
-            .control
+        self.control(name)?
             .send(Control::Pause)
             .await
             .map_err(|_| RuntimeError::Stopping)
@@ -294,8 +297,7 @@ impl Runtime {
 
     /// Resumes a paused or failed projection from its checkpoint.
     pub async fn resume(&self, name: &str) -> Result<(), RuntimeError> {
-        self.link(name)?
-            .control
+        self.control(name)?
             .send(Control::Resume)
             .await
             .map_err(|_| RuntimeError::Stopping)
@@ -305,8 +307,7 @@ impl Runtime {
     /// nothing; returns once the rebuild began.
     pub async fn rebuild(&self, name: &str) -> Result<(), RuntimeError> {
         let (tx, rx) = oneshot::channel();
-        self.link(name)?
-            .control
+        self.control(name)?
             .send(Control::Rebuild(tx))
             .await
             .map_err(|_| RuntimeError::Stopping)?;
@@ -316,14 +317,27 @@ impl Runtime {
         }
     }
 
-    /// Stops every task, waits for them and flushes the store.
-    pub async fn shutdown(self) -> Result<(), RuntimeError> {
+    /// Stops every task, waits for them and flushes the store. Later
+    /// calls return at once.
+    pub async fn shutdown(&self) -> Result<(), RuntimeError> {
         self.shared.cancel.cancel();
         let tasks: Vec<JoinHandle<()>> =
             std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|e| e.into_inner()));
         for t in tasks {
             let _ = t.await;
         }
+        // Release the projection files, so the store can register them
+        // again in this process.
+        self.shared
+            .runners
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.shared
+            .tails
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         self.shared.store.flush()?;
         Ok(())
     }

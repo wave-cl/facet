@@ -4,6 +4,7 @@
 
 pub mod buckets;
 pub mod counter;
+pub mod dynr;
 pub mod list;
 pub mod map;
 pub mod register;
@@ -13,6 +14,7 @@ pub mod sorted_set;
 pub mod table;
 
 pub use counter::Num;
+pub use dynr::{DynR, DynScan, KeyShape};
 pub use scan::Scan;
 pub use sorted_set::Score;
 

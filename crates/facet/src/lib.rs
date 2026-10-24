@@ -35,7 +35,7 @@ pub use error::{ApplyError, Error, Result};
 pub use keyenc::{KeyKind, KeyPart, KeyTuple, KeyType};
 pub use meta::{Checkpoint, FORMAT, Mark};
 pub use prim::buckets::{Bucket, window_start};
-pub use prim::{Num, Scan, Score};
+pub use prim::{DynR, DynScan, KeyShape, Num, Scan, Score};
 pub use reader::{Cursor, Page, Snapshot};
 pub use schema::{
     CollectionDecl, CollectionKind, ColumnDecl, IndexDecl, KeySchema, NumKind, ProjectionDecl,

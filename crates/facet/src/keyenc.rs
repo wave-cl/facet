@@ -37,6 +37,7 @@ pub enum KeyKind {
     /// `rust_decimal::Decimal`.
     Decimal,
     /// A UTF-8 string.
+    #[serde(rename = "string")]
     Str,
     /// Raw bytes.
     Bytes,

@@ -1,0 +1,258 @@
+syntax = "proto3";
+
+package facet.v1;
+
+// Reads of a projection's collections. Keys and values travel as JSON
+// text: a key is a JSON array of its parts (a single part may be given
+// bare); decimals, UUIDs and timestamps are strings, bytes are base64.
+service Query {
+  // One entry by its whole key (the register's key is empty).
+  rpc Get(GetRequest) returns (GetResponse);
+  // Entries in key order, narrowed by a prefix, bounds, a cursor.
+  rpc Scan(ScanRequest) returns (ScanResponse);
+  // A table's rows in the order of a secondary index.
+  rpc Lookup(LookupRequest) returns (ScanResponse);
+  // A sorted set's partition in score order.
+  rpc Range(RangeRequest) returns (ScanResponse);
+  // Buckets of one key and width in time order.
+  rpc Buckets(BucketsRequest) returns (ScanResponse);
+  // Every committed batch's changes to a collection, from now on.
+  rpc Watch(WatchRequest) returns (stream Change);
+}
+
+// The runtime and its projections.
+service Admin {
+  rpc Status(StatusRequest) returns (StatusResponse);
+  rpc ListProjections(ListProjectionsRequest) returns (ListProjectionsResponse);
+  rpc GetProjection(ProjectionRequest) returns (ProjectionStatus);
+  rpc DeadLetters(DeadLettersRequest) returns (DeadLettersResponse);
+  // The four below need the admin token when one is configured.
+  rpc Rebuild(ProjectionRequest) returns (ProjectionStatus);
+  rpc Pause(ProjectionRequest) returns (ProjectionStatus);
+  rpc Resume(ProjectionRequest) returns (ProjectionStatus);
+  // Deletes the file of a projection the application no longer registers.
+  rpc DropProjection(ProjectionRequest) returns (DropResponse);
+}
+
+enum State {
+  STATE_UNSPECIFIED = 0;
+  STARTING = 1;
+  CATCHING_UP = 2;
+  LIVE = 3;
+  REBUILDING = 4;
+  FAILED = 5;
+  PAUSED = 6;
+  STOPPED = 7;
+  // In the store but not registered by the application.
+  ORPHANED = 8;
+}
+
+// Read your writes: wait until the projection applied `at_least` (a
+// chron commit's `next`), at most `wait_ms` (default 5000, max 30000).
+message ReadAt {
+  optional uint64 at_least = 1;
+  optional uint32 wait_ms = 2;
+}
+
+// What the read saw.
+message Seen {
+  uint64 checkpoint = 1;
+  State state = 2;
+  uint64 chron_head = 3;
+}
+
+message Entry {
+  // JSON: the key's parts.
+  string key = 1;
+  // JSON: the value (a row is an object, a set member `true`).
+  string value = 2;
+}
+
+message GetRequest {
+  string projection = 1;
+  string collection = 2;
+  // JSON; empty for a register or an empty key.
+  string key = 3;
+  ReadAt at = 4;
+}
+
+message GetResponse {
+  bool found = 1;
+  string value = 2;
+  Seen seen = 3;
+}
+
+message ScanRequest {
+  string projection = 1;
+  string collection = 2;
+  // JSON arrays of leading key parts; empty for none.
+  string prefix = 3;
+  string from = 4;
+  string to = 5;
+  // The previous page's `next`.
+  bytes after = 6;
+  // 0 = the daemon's default (100); capped.
+  uint32 limit = 7;
+  bool reverse = 8;
+  ReadAt at = 9;
+}
+
+message ScanResponse {
+  repeated Entry entries = 1;
+  // Empty when the scan is exhausted.
+  bytes next = 2;
+  Seen seen = 3;
+}
+
+message LookupRequest {
+  string projection = 1;
+  string table = 2;
+  string index = 3;
+  string prefix = 4;
+  string from = 5;
+  string to = 6;
+  bytes after = 7;
+  uint32 limit = 8;
+  bool reverse = 9;
+  ReadAt at = 10;
+}
+
+message RangeRequest {
+  string projection = 1;
+  string collection = 2;
+  // JSON: the partition's parts (empty for an unpartitioned set).
+  string partition = 3;
+  // JSON scalars; inclusive.
+  string min = 4;
+  string max = 5;
+  bytes after = 6;
+  uint32 limit = 7;
+  // Highest first: the top of the set.
+  bool reverse = 8;
+  ReadAt at = 9;
+}
+
+message BucketsRequest {
+  string projection = 1;
+  string collection = 2;
+  string key = 3;
+  // `minute`, `hour`, `day` or a width in nanoseconds.
+  string width = 4;
+  // Window starts, unix nanoseconds, inclusive.
+  optional int64 from = 5;
+  optional int64 to = 6;
+  bytes after = 7;
+  uint32 limit = 8;
+  bool reverse = 9;
+  ReadAt at = 10;
+}
+
+message WatchRequest {
+  string projection = 1;
+  string collection = 2;
+  // JSON: only changes to this key, or to keys under this prefix.
+  string key = 3;
+  string prefix = 4;
+}
+
+message Change {
+  uint64 checkpoint = 1;
+  string collection = 2;
+  // JSON keys that changed (empty with `all`).
+  repeated string keys = 3;
+  // Everything may have changed: re-read.
+  bool all = 4;
+}
+
+message StatusRequest {}
+
+message SourceStatus {
+  string source = 1;
+  bool connected = 2;
+  uint64 reconnects = 3;
+  string error = 4;
+  uint64 buffered = 5;
+}
+
+message StatusResponse {
+  string version = 1;
+  uint64 uptime_secs = 2;
+  string store_path = 3;
+  string chron_db_id = 4;
+  uint64 chron_head = 5;
+  // Set when the runtime as a whole cannot go on.
+  string fatal = 6;
+  uint32 starting = 7;
+  uint32 catching_up = 8;
+  uint32 live = 9;
+  uint32 rebuilding = 10;
+  uint32 failed = 11;
+  uint32 paused = 12;
+  repeated SourceStatus sources = 13;
+}
+
+message CollectionInfo {
+  string name = 1;
+  string kind = 2;
+  // JSON: the key shape `{"kinds": [...], "nullable": [...], "names": [...]}`.
+  string key_shape = 3;
+  // JSON: the declaration of the kind.
+  string decl = 4;
+  repeated string indexes = 5;
+}
+
+message ProjectionStatus {
+  string name = 1;
+  string version = 2;
+  State state = 3;
+  uint64 checkpoint = 4;
+  uint64 chron_head = 5;
+  uint64 lag = 6;
+  string error = 7;
+  string source = 8;
+  repeated string event_types = 9;
+  repeated CollectionInfo collections = 10;
+  uint64 dead_letters = 11;
+  uint64 batches = 12;
+  uint64 events = 13;
+  optional int64 last_batch_unix_nanos = 14;
+  string on_error = 15;
+  string rebuilt = 16;
+  uint64 reconnects = 17;
+}
+
+message ListProjectionsRequest {}
+
+message ListProjectionsResponse {
+  repeated ProjectionStatus projections = 1;
+}
+
+message ProjectionRequest {
+  string name = 1;
+}
+
+message DropResponse {
+  bool existed = 1;
+}
+
+message DeadLettersRequest {
+  string name = 1;
+  // Positions after this one.
+  uint64 after = 2;
+  uint32 limit = 3;
+}
+
+message DeadLetter {
+  uint64 position = 1;
+  optional bytes aggregate = 2;
+  uint64 index = 3;
+  repeated bytes tags = 4;
+  string error = 5;
+  int64 at_unix_nanos = 6;
+}
+
+message DeadLettersResponse {
+  repeated DeadLetter dead_letters = 1;
+  // The last position returned, to pass as `after`; 0 when none.
+  uint64 next = 2;
+}

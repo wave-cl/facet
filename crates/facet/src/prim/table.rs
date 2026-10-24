@@ -18,7 +18,7 @@ use crate::keyenc::{KeyKind, KeyPart, KeyType, decode_parts, decode_parts_nullab
 use crate::limits::{check_key_len, check_value_len};
 use crate::prim::{Scan, check_kinds, find, kinds_str, mismatch, table_name};
 use crate::reader::Snapshot;
-use crate::schema::{CollectionKind, ColumnDecl, canonicalize};
+use crate::schema::{CollectionDecl, CollectionKind, ColumnDecl, canonicalize};
 use crate::value::{Value, from_value, to_value};
 use crate::vbin;
 use crate::writer::Writer;
@@ -33,10 +33,10 @@ struct IndexMeta {
 }
 
 /// The declaration, resolved once per handle.
-struct Meta {
+pub(crate) struct Meta {
     name: String,
     table: String,
-    columns: Vec<ColumnDecl>,
+    pub(crate) columns: Vec<ColumnDecl>,
     pk: Vec<usize>,
     pk_kinds: Vec<KeyKind>,
     non_pk: Vec<usize>,
@@ -45,6 +45,14 @@ struct Meta {
 
 fn open<K: KeyType>(decl: &crate::schema::ProjectionDecl, name: &str) -> Result<Arc<Meta>> {
     let c = find(decl, name)?;
+    let meta = open_meta(c)?;
+    check_kinds(name, "table", "primary key", &meta.pk_kinds, &K::kinds())?;
+    Ok(meta)
+}
+
+/// Resolves a table declaration.
+pub(crate) fn open_meta(c: &CollectionDecl) -> Result<Arc<Meta>> {
+    let name = c.name.as_str();
     let CollectionKind::Table {
         columns,
         primary_key,
@@ -59,7 +67,6 @@ fn open<K: KeyType>(decl: &crate::schema::ProjectionDecl, name: &str) -> Result<
         .iter()
         .map(|&i| columns[i].ty.key_kind().expect("validated"))
         .collect();
-    check_kinds(name, "table", "primary key", &pk_kinds, &K::kinds())?;
     let non_pk: Vec<usize> = (0..columns.len()).filter(|i| !pk.contains(i)).collect();
     let indexes = indexes
         .iter()
@@ -154,7 +161,7 @@ impl Meta {
     }
 
     /// The column values from a stored entry.
-    fn values_from(&self, pk: &[u8], non_pk: &[u8]) -> Result<Vec<Value>> {
+    pub(crate) fn values_from(&self, pk: &[u8], non_pk: &[u8]) -> Result<Vec<Value>> {
         let (parts, used) = decode_parts(&self.pk_kinds, pk)?;
         if used != pk.len() {
             return Err(Error::Key("trailing bytes after the primary key".into()));

@@ -1,0 +1,20 @@
+[package]
+name = "facet-proto"
+description = "facet: the gRPC contract (facet.v1) and generated client and server code"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+documentation = "https://docs.rs/facet-proto"
+keywords = ["event-sourcing", "cqrs", "grpc", "tonic", "protobuf"]
+categories = ["network-programming", "database"]
+
+[dependencies]
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
+prost = { workspace = true }
+
+[build-dependencies]
+tonic-prost-build = { workspace = true }

@@ -575,6 +575,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "facet-client"
+version = "0.1.0"
+dependencies = [
+ "facet-proto",
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tonic",
+ "tonic-health",
+]
+
+[[package]]
 name = "facet-db"
 version = "0.1.0"
 dependencies = [
@@ -595,6 +609,54 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "facet-proto"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
+]
+
+[[package]]
+name = "facetd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "bytes",
+ "chron-client",
+ "chrond",
+ "clap",
+ "facet-client",
+ "facet-db",
+ "facet-proto",
+ "futures",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "pin-project-lite",
+ "prometheus",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tonic-health",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 

@@ -2,6 +2,9 @@
 resolver = "2"
 members = [
     "crates/facet",
+    "crates/facet-proto",
+    "crates/facet-client",
+    "crates/facetd",
 ]
 
 [workspace.package]
@@ -15,6 +18,9 @@ repository = "https://github.com/wave-cl/facet"
 # The library publishes as `facet-db` (the crates.io name `facet` is a
 # reflection crate); its library target is `facet`, so code says `use facet::`.
 facet = { package = "facet-db", path = "crates/facet", version = "0.1.0" }
+facet-proto = { path = "crates/facet-proto", version = "0.1.0" }
+facet-client = { path = "crates/facet-client", version = "0.1.0" }
+facetd = { path = "crates/facetd", version = "0.1.0" }
 
 redb = "4"
 uuid = "1"

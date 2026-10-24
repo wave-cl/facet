@@ -52,12 +52,22 @@ impl Handle {
 
     /// The projection as the application defined it.
     pub fn definition(&self, name: &str) -> Option<Arc<super::Projection>> {
-        self.shared.runners.get(name).map(|r| r.def.clone())
+        self.runners().get(name).map(|r| r.def.clone())
     }
 
     /// The projection's stored data (its file).
     pub fn projection(&self, name: &str) -> Option<ProjectionData> {
-        self.shared.runners.get(name).map(|r| r.data.clone())
+        self.runners().get(name).map(|r| r.data.clone())
+    }
+
+    fn runners(
+        &self,
+    ) -> std::sync::RwLockReadGuard<'_, std::collections::HashMap<String, super::rt::RunnerLink>>
+    {
+        self.shared
+            .runners
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// A consistent snapshot of the projection.
@@ -70,10 +80,7 @@ impl Handle {
 
     /// The projection's status.
     pub fn status(&self, name: &str) -> Option<Status> {
-        self.shared
-            .runners
-            .get(name)
-            .map(|r| r.status.borrow().clone())
+        self.runners().get(name).map(|r| r.status.borrow().clone())
     }
 
     /// Every projection's status, in registration order.
@@ -87,7 +94,7 @@ impl Handle {
 
     /// Follows the projection's status.
     pub fn watch_status(&self, name: &str) -> Option<watch::Receiver<Status>> {
-        self.shared.runners.get(name).map(|r| r.status.clone())
+        self.runners().get(name).map(|r| r.status.clone())
     }
 
     /// Follows the projection's committed checkpoint.
@@ -134,6 +141,8 @@ impl Handle {
     pub fn sources(&self) -> Vec<SourceStatus> {
         self.shared
             .tails
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
             .iter()
             .map(|t| {
                 let s = t.state.borrow();
@@ -148,9 +157,14 @@ impl Handle {
             .collect()
     }
 
-    /// chron's confirmed head as the runtime last saw it.
+    /// chron's confirmed head as the runtime last saw it: what the status
+    /// task read, or the furthest checkpoint any projection reached since.
     pub fn chron_head(&self) -> u64 {
-        *self.shared.head.borrow()
+        let polled = *self.shared.head.borrow();
+        self.runners()
+            .values()
+            .map(|r| r.status.borrow().checkpoint.next)
+            .fold(polled, u64::max)
     }
 
     /// The chron database id the store is bound to.

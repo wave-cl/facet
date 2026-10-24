@@ -59,3 +59,46 @@ crates share one version.
   Retention that passed a projection's checkpoint fails it; a rebuild,
   or a projection with nothing applied yet, starts at the floor.
   `Handle::sources` reports every tail.
+- Dynamic reads for services: `Snapshot::collection(name)` gives a
+  `DynR` over any collection with `KeyTuple` keys and `Value` values
+  (`get`, `scan`, `lookup` by index, `by_score`, `buckets`), a
+  `KeyShape` describing a collection's or an index's key, and cursors
+  checked against the scan they came from.
+
+### facet-proto
+
+- The `facet.v1` contract: `Query` (`Get`, `Scan`, `Lookup`, `Range`,
+  `Buckets`, `Watch`) and `Admin` (`Status`, `ListProjections`,
+  `GetProjection`, `DeadLetters`, `Rebuild`, `Pause`, `Resume`,
+  `DropProjection`), keys and values as JSON text, `ReadAt` for read
+  your writes, `Seen` on every read; the generated code is committed.
+
+### facetd
+
+- The daemon as a library an application binary embeds:
+  `facetd::serve(app, options)`, `facetd::run(app, cli)` with
+  `facetd::Cli` to flatten into the binary's flags (`--data-dir`,
+  `--chron`, `--chron-db`, tokens and token files, chron TLS,
+  `--listen`, `--metrics-listen`, server TLS and mTLS, `--token`,
+  `--admin-token`, `--no-fsync`, `--rebind`, batch sizes, `--log-format`).
+  Reads refuse a failed projection with its error, wait for `at_least`
+  (504-style `UNAVAILABLE` with the checkpoint when it is not reached),
+  page with opaque cursors and default to 100 entries; `Watch` streams
+  each batch's changed keys, filtered by key or prefix, and ends with
+  `OUT_OF_RANGE` when the watcher fell behind. Orphaned projections
+  (in the store, not registered) are listed and can be dropped. Health:
+  `facet.v1.Query` while serving, `facet.v1.Query.live` while every
+  projection is caught up. Prometheus metrics at `--metrics-listen`:
+  per-projection checkpoint, lag, state, dead letters, batches, events
+  and reconnects, per-source connection and buffer, chron's head, the
+  fatal flag, calls by method and code, durations, open streams,
+  watchers. `facetd::testing::Fixture` (feature `test-util`) starts a
+  chrond and a facetd for tests.
+
+### facet-client
+
+- A typed async client: `get`, `scan`, `lookup`, `range`, `top`,
+  `buckets`, `watch`, `status`, `projections`, `projection`,
+  `dead_letters`, `rebuild`, `pause`, `resume`, `drop_projection`,
+  `health`; keys and values as `serde_json::Value`; `ClientError`
+  with `BoundTimeout` and `WatchLagged` carrying the positions.

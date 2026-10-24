@@ -37,3 +37,19 @@ jobs:
       # Every push proves the crates package: readme paths, versions on
       # path dependencies, stripped dev-dependencies.
       - run: cargo package --workspace --locked
+      - name: the proto crate ships the .proto and the generated code
+        run: |
+          cargo package --list -p facet-proto | tee /tmp/proto-files
+          grep -q '^proto/facet/v1/facet.proto$' /tmp/proto-files
+          grep -q '^src/generated/facet.v1.rs$' /tmp/proto-files
+
+  # The committed generated code must match the .proto.
+  proto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: FACET_PROTO_REGEN=1 cargo build -p facet-proto
+      - run: git diff --exit-code -- crates/facet-proto/src/generated

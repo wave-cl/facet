@@ -1,0 +1,22 @@
+[package]
+name = "facet-client"
+description = "facet: a typed async client for facetd over gRPC"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+documentation = "https://docs.rs/facet-client"
+keywords = ["event-sourcing", "cqrs", "projections", "grpc", "client"]
+categories = ["database", "asynchronous"]
+
+[dependencies]
+facet-proto = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
+tonic = { workspace = true, features = ["tls-native-roots"] }
+tonic-health = { workspace = true }

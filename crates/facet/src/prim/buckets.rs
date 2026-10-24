@@ -41,6 +41,11 @@ impl<N: Num> Bucket<N> {
         out
     }
 
+    /// Decodes a stored bucket.
+    pub fn decode_bytes(start: i64, b: &[u8]) -> Result<Bucket<N>> {
+        Self::decode(start, b)
+    }
+
     fn decode(start: i64, b: &[u8]) -> Result<Bucket<N>> {
         if b.len() < 8 || !(b.len() - 8).is_multiple_of(3) {
             return Err(Error::Value("bucket bytes".into()));
