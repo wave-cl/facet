@@ -1,0 +1,25 @@
+[package]
+name = "facet-e2e"
+description = "facet: an end-to-end run with release binaries over an in-process chron group (not published)"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "facet-e2e"
+path = "src/main.rs"
+
+[dependencies]
+chrond = { workspace = true, features = ["test-util"] }
+chron-client = { workspace = true }
+facet-client = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process"] }

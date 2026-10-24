@@ -6,6 +6,8 @@ members = [
     "crates/facet-client",
     "crates/facetd",
     "crates/facet-cli",
+    "examples/bank-views",
+    "tools/facet-e2e",
 ]
 
 [workspace.package]

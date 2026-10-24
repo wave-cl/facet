@@ -105,6 +105,16 @@ crates share one version.
   `/openapi.json` documents every route (a unit test checks the two
   agree); `facet_http_requests_total{route,status}`.
 
+### examples and tools (not published)
+
+- `examples/bank-views`: projections over chron's bank example
+  (balances, owners, closed accounts, a top list, deposits per hour and
+  day, a transactions table indexed by account) served by an embedded
+  facetd (`bank-views serve`), and `bank-views seed` to write events.
+- `tools/facet-e2e` and `scripts/e2e.sh`: a release-binary run over an
+  in-process three-node chron group with the leader killed and
+  restarted, checking every view against a replay of the log.
+
 ### facet-cli
 
 - The `facet` binary: `get`, `scan`, `lookup`, `range`, `top`,
