@@ -54,7 +54,7 @@ impl<V> RegisterW<'_, '_, V> {
         let bytes = vbin::encode(&check_value(&self.schema, to_value(v)?)?);
         check_value_len(bytes.len())?;
         self.w
-            .table(&self.table)?
+            .raw_table(&self.table)?
             .insert(&b""[..], bytes.as_slice())?;
         self.w.changes.touch(&self.name, b"");
         Ok(())
@@ -65,7 +65,7 @@ impl<V> RegisterW<'_, '_, V> {
     where
         V: DeserializeOwned,
     {
-        let t = self.w.table(&self.table)?;
+        let t = self.w.raw_table(&self.table)?;
         let Some(g) = t.get(&b""[..])? else {
             return Ok(None);
         };
@@ -75,7 +75,7 @@ impl<V> RegisterW<'_, '_, V> {
 
     /// Clears the value; `true` when there was one.
     pub fn clear(&mut self) -> Result<bool> {
-        let had = self.w.table(&self.table)?.remove(&b""[..])?.is_some();
+        let had = self.w.raw_table(&self.table)?.remove(&b""[..])?.is_some();
         if had {
             self.w.changes.touch(&self.name, b"");
         }
@@ -107,7 +107,7 @@ impl<V> RegisterR<'_, V> {
     where
         V: DeserializeOwned,
     {
-        let Some(t) = self.s.table(&self.table)? else {
+        let Some(t) = self.s.raw_table(&self.table)? else {
             return Ok(None);
         };
         let Some(g) = t.get(&b""[..])? else {
@@ -119,7 +119,7 @@ impl<V> RegisterR<'_, V> {
 
     /// The raw [`crate::Value`].
     pub fn get_value(&self) -> Result<Option<crate::Value>> {
-        let Some(t) = self.s.table(&self.table)? else {
+        let Some(t) = self.s.raw_table(&self.table)? else {
             return Ok(None);
         };
         let Some(g) = t.get(&b""[..])? else {

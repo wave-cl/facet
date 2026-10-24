@@ -263,10 +263,13 @@ fn scans_page_in_both_directions_within_a_prefix() {
     assert_eq!(a.items.len(), 6);
     assert!(a.items.iter().all(|((s, _), _)| s == "a"));
     assert_eq!(
-        m.count_prefix(&("a".to_string(),), 100).unwrap(),
+        m.scan().prefix(&("a".to_string(),)).count(100).unwrap(),
         (6, false)
     );
-    assert_eq!(m.count_prefix(&("a".to_string(),), 4).unwrap(), (4, true));
+    assert_eq!(
+        m.scan().prefix(&("a".to_string(),)).count(4).unwrap(),
+        (4, true)
+    );
 
     // Pages of 4, forward and reverse, concatenate to the full scans.
     for reverse in [false, true] {

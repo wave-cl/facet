@@ -87,12 +87,15 @@ pub enum KeyPart {
     Uuid(Uuid),
     /// Unix nanoseconds.
     Timestamp(Timestamp),
+    /// A null in a nullable part (index columns only).
+    Null(KeyKind),
 }
 
 impl KeyPart {
     /// The part's kind.
     pub fn kind(&self) -> KeyKind {
         match self {
+            KeyPart::Null(k) => *k,
             KeyPart::Bool(_) => KeyKind::Bool,
             KeyPart::Int(_) => KeyKind::Int,
             KeyPart::Uint(_) => KeyKind::Uint,
@@ -115,6 +118,19 @@ impl KeyPart {
             KeyPart::Bytes(b) => encode_bytes(b, out),
             KeyPart::Uuid(u) => encode_uuid(*u, out),
             KeyPart::Timestamp(t) => encode_i64(t.0, out),
+            KeyPart::Null(_) => out.push(0),
+        }
+    }
+
+    /// Appends the nullable encoding: `00` for a null, else `01` and the
+    /// part.
+    pub fn encode_nullable(&self, out: &mut Vec<u8>) {
+        match self {
+            KeyPart::Null(_) => out.push(0),
+            other => {
+                out.push(1);
+                other.encode(out);
+            }
         }
     }
 }
@@ -285,12 +301,45 @@ pub fn decode_part(kind: KeyKind, bytes: &[u8]) -> Result<(KeyPart, usize)> {
     }
 }
 
+/// Decodes one nullable part: `00` is a null, `01` precedes the part.
+pub fn decode_nullable_part(kind: KeyKind, bytes: &[u8]) -> Result<(KeyPart, usize)> {
+    match bytes.first() {
+        Some(0) => Ok((KeyPart::Null(kind), 1)),
+        Some(1) => {
+            let (p, used) = decode_part(kind, &bytes[1..])?;
+            Ok((p, used + 1))
+        }
+        Some(b) => Err(Error::Key(format!("nullable {kind} key byte {b:#04x}"))),
+        None => Err(short(kind)),
+    }
+}
+
 /// Decodes the parts of these kinds from the front of `bytes`.
 pub fn decode_parts(kinds: &[KeyKind], bytes: &[u8]) -> Result<(KeyTuple, usize)> {
     let mut parts = Vec::with_capacity(kinds.len());
     let mut at = 0;
     for &k in kinds {
         let (p, used) = decode_part(k, &bytes[at..])?;
+        parts.push(p);
+        at += used;
+    }
+    Ok((KeyTuple(parts), at))
+}
+
+/// Decodes parts of which some are nullable.
+pub fn decode_parts_nullable(
+    kinds: &[KeyKind],
+    nullable: &[bool],
+    bytes: &[u8],
+) -> Result<(KeyTuple, usize)> {
+    let mut parts = Vec::with_capacity(kinds.len());
+    let mut at = 0;
+    for (i, &k) in kinds.iter().enumerate() {
+        let (p, used) = if nullable.get(i).copied().unwrap_or(false) {
+            decode_nullable_part(k, &bytes[at..])?
+        } else {
+            decode_part(k, &bytes[at..])?
+        };
         parts.push(p);
         at += used;
     }
@@ -388,11 +437,58 @@ fn decode_decimal(bytes: &[u8]) -> Result<(Decimal, usize)> {
     Ok((d, used))
 }
 
+impl KeyPart {
+    /// The part a canonical [`crate::Value`] of this kind holds; `Null`
+    /// becomes `KeyPart::Null`. The value must already be canonical for
+    /// the kind (see [`crate::schema::canonicalize`]).
+    pub fn from_value(kind: KeyKind, v: &crate::Value) -> Result<KeyPart> {
+        use crate::Value as V;
+        Ok(match (kind, v) {
+            (k, V::Null) => KeyPart::Null(k),
+            (KeyKind::Bool, V::Bool(b)) => KeyPart::Bool(*b),
+            (KeyKind::Int, V::Int(i)) => KeyPart::Int(*i),
+            (KeyKind::Uint, V::Uint(u)) => KeyPart::Uint(*u),
+            (KeyKind::Decimal, V::Decimal(d)) => KeyPart::Decimal(*d),
+            (KeyKind::Str, V::Str(s)) => KeyPart::Str(s.clone()),
+            (KeyKind::Bytes, V::Bytes(b)) => KeyPart::Bytes(b.clone()),
+            (KeyKind::Uuid, V::Uuid(u)) => KeyPart::Uuid(*u),
+            (KeyKind::Timestamp, V::Timestamp(t)) => KeyPart::Timestamp(*t),
+            (k, v) => {
+                return Err(Error::Key(format!(
+                    "a {} value cannot be a {k} key part",
+                    v.type_name()
+                )));
+            }
+        })
+    }
+
+    /// The part as a [`crate::Value`].
+    pub fn to_value(&self) -> crate::Value {
+        use crate::Value as V;
+        match self {
+            KeyPart::Null(_) => V::Null,
+            KeyPart::Bool(b) => V::Bool(*b),
+            KeyPart::Int(i) => V::Int(*i),
+            KeyPart::Uint(u) => V::Uint(*u),
+            KeyPart::Decimal(d) => V::Decimal(*d),
+            KeyPart::Str(s) => V::Str(s.clone()),
+            KeyPart::Bytes(b) => V::Bytes(b.clone()),
+            KeyPart::Uuid(u) => V::Uuid(*u),
+            KeyPart::Timestamp(t) => V::Timestamp(*t),
+        }
+    }
+}
+
 /// A Rust type usable as a key: a scalar of one [`KeyKind`] or a tuple of
 /// them.
 pub trait KeyType: Sized {
     /// The kinds of the parts, in order.
     fn kinds() -> Vec<KeyKind>;
+    /// Which parts are nullable (`Option<T>`), in order. Only index keys
+    /// may have nullable parts.
+    fn nullable() -> Vec<bool> {
+        vec![false; Self::kinds().len()]
+    }
     /// Appends the encoding.
     fn encode(&self, out: &mut Vec<u8>);
     /// Decodes from the front of `bytes`: the value and the bytes taken.
@@ -506,6 +602,37 @@ impl KeyType for () {
     }
 }
 
+/// A nullable part: `00` for `None`, else `01` and the value. Nulls sort
+/// first.
+impl<T: KeyType> KeyType for Option<T> {
+    fn kinds() -> Vec<KeyKind> {
+        T::kinds()
+    }
+    fn nullable() -> Vec<bool> {
+        vec![true; T::kinds().len()]
+    }
+    fn encode(&self, out: &mut Vec<u8>) {
+        match self {
+            None => out.push(0),
+            Some(v) => {
+                out.push(1);
+                v.encode(out);
+            }
+        }
+    }
+    fn decode(bytes: &[u8]) -> Result<(Self, usize)> {
+        match bytes.first() {
+            Some(0) => Ok((None, 1)),
+            Some(1) => {
+                let (v, used) = T::decode(&bytes[1..])?;
+                Ok((Some(v), used + 1))
+            }
+            Some(b) => Err(Error::Key(format!("nullable key byte {b:#04x}"))),
+            None => Err(Error::Key("truncated nullable key".into())),
+        }
+    }
+}
+
 impl KeyType for &str {
     fn kinds() -> Vec<KeyKind> {
         vec![KeyKind::Str]
@@ -543,6 +670,11 @@ macro_rules! tuple_key {
                 let mut k = Vec::new();
                 $(k.extend($name::kinds());)+
                 k
+            }
+            fn nullable() -> Vec<bool> {
+                let mut n = Vec::new();
+                $(n.extend($name::nullable());)+
+                n
             }
             #[allow(non_snake_case)]
             fn encode(&self, out: &mut Vec<u8>) {

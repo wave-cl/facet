@@ -57,7 +57,7 @@ impl Snapshot {
     }
 
     /// The table, or `None` when nothing was ever written to it.
-    pub(crate) fn table(&self, name: &str) -> Result<Option<Arc<RawReadTable>>> {
+    pub(crate) fn raw_table(&self, name: &str) -> Result<Option<Arc<RawReadTable>>> {
         if let Some(t) = self.tables.borrow().get(name) {
             return Ok(t.clone());
         }
@@ -81,6 +81,46 @@ impl Snapshot {
     /// The map collection `name` keyed by `K`.
     pub fn map<K: crate::KeyType, V>(&self, name: &str) -> Result<prim::map::MapR<'_, K, V>> {
         prim::map::MapR::open(self, name)
+    }
+
+    /// The set collection `name` with members `M`.
+    pub fn set<M: crate::KeyType>(&self, name: &str) -> Result<prim::set::SetR<'_, M>> {
+        prim::set::SetR::open(self, name)
+    }
+
+    /// The counter collection `name` keyed by `K` holding `N`.
+    pub fn counter<K: crate::KeyType, N: prim::Num>(
+        &self,
+        name: &str,
+    ) -> Result<prim::counter::CounterR<'_, K, N>> {
+        prim::counter::CounterR::open(self, name)
+    }
+
+    /// The list collection `name` partitioned by `P`.
+    pub fn list<P: crate::KeyType, V>(&self, name: &str) -> Result<prim::list::ListR<'_, P, V>> {
+        prim::list::ListR::open(self, name)
+    }
+
+    /// The table collection `name` with primary key `K` and rows `R`.
+    pub fn table<K: crate::KeyType, R>(&self, name: &str) -> Result<prim::table::TableR<'_, K, R>> {
+        prim::table::TableR::open(self, name)
+    }
+
+    /// The sorted set collection `name` partitioned by `P`, members `M`,
+    /// scores `S`.
+    pub fn sorted_set<P: crate::KeyType, M: crate::KeyType, S: prim::Score>(
+        &self,
+        name: &str,
+    ) -> Result<prim::sorted_set::SortedSetR<'_, P, M, S>> {
+        prim::sorted_set::SortedSetR::open(self, name)
+    }
+
+    /// The buckets collection `name` keyed by `K` summing `N`.
+    pub fn buckets<K: crate::KeyType, N: prim::Num>(
+        &self,
+        name: &str,
+    ) -> Result<prim::buckets::BucketsR<'_, K, N>> {
+        prim::buckets::BucketsR::open(self, name)
     }
 }
 
@@ -133,6 +173,8 @@ pub(crate) struct RawScan {
     pub prefix: Vec<u8>,
     pub from: Option<Vec<u8>>,
     pub to: Option<Vec<u8>>,
+    /// An exclusive upper bound, used when `to` is not set.
+    pub to_exclusive: Option<Vec<u8>>,
     pub after: Option<Vec<u8>>,
     pub reverse: bool,
     pub limit: usize,
@@ -165,6 +207,15 @@ impl RawScan {
             };
             if tighter {
                 upper = Bound::Included(to.clone());
+            }
+        } else if let Some(to) = &self.to_exclusive {
+            let tighter = match &upper {
+                Bound::Excluded(end) => to < end,
+                Bound::Unbounded => true,
+                Bound::Included(_) => unreachable!(),
+            };
+            if tighter {
+                upper = Bound::Excluded(to.clone());
             }
         }
         if let Some(after) = &self.after {

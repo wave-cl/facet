@@ -1,4 +1,6 @@
 //! A map: values by key, one entry per key.
+//!
+//! Table `c:<name>`: `enc(key) -> vbin(value)`.
 
 use std::marker::PhantomData;
 
@@ -6,13 +8,13 @@ use redb::{ReadableTable, ReadableTableMetadata};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::keyenc::KeyType;
-use crate::limits::{check_key_len, check_value_len};
-use crate::prim::{find, kinds_str, mismatch, table_name};
-use crate::reader::{Cursor, Page, RawScan, Snapshot};
-use crate::schema::{CollectionKind, ValueSchema, check_value};
-use crate::value::{from_value, to_value};
+use crate::prim::{
+    Scan, check_kinds, decode_value, encode_key, encode_value, find, mismatch, table_name,
+};
+use crate::reader::Snapshot;
+use crate::schema::{CollectionKind, ValueSchema};
 use crate::vbin;
 use crate::writer::Writer;
 
@@ -20,34 +22,11 @@ fn open<K: KeyType>(decl: &crate::schema::ProjectionDecl, name: &str) -> Result<
     let c = find(decl, name)?;
     match &c.kind {
         CollectionKind::Map { key, value } => {
-            let asked = K::kinds();
-            if asked != key.0 {
-                return Err(mismatch(
-                    name,
-                    format!("map keyed by {}", kinds_str(&key.0)),
-                    format!("map keyed by {}", kinds_str(&asked)),
-                ));
-            }
+            check_kinds(name, "map", "key", &key.0, &K::kinds())?;
             Ok(value.clone())
         }
         other => Err(mismatch(name, other.name(), "map")),
     }
-}
-
-fn encode_key<K: KeyType>(k: &K) -> Result<Vec<u8>> {
-    let bytes = k.to_key();
-    check_key_len(bytes.len())?;
-    Ok(bytes)
-}
-
-fn encode_value<V: Serialize>(schema: &ValueSchema, v: &V) -> Result<Vec<u8>> {
-    let bytes = vbin::encode(&check_value(schema, to_value(v)?)?);
-    check_value_len(bytes.len())?;
-    Ok(bytes)
-}
-
-fn decode_value<V: DeserializeOwned>(bytes: &[u8]) -> Result<V> {
-    from_value(vbin::decode(bytes)?)
 }
 
 /// A map inside a batch.
@@ -81,7 +60,7 @@ impl<K: KeyType, V> MapW<'_, '_, K, V> {
         let key = encode_key(k)?;
         let val = encode_value(&self.schema, v)?;
         self.w
-            .table(&self.table)?
+            .raw_table(&self.table)?
             .insert(key.as_slice(), val.as_slice())?;
         self.w.changes.touch(&self.name, &key);
         Ok(())
@@ -93,7 +72,7 @@ impl<K: KeyType, V> MapW<'_, '_, K, V> {
         V: DeserializeOwned,
     {
         let key = encode_key(k)?;
-        let t = self.w.table(&self.table)?;
+        let t = self.w.raw_table(&self.table)?;
         let Some(g) = t.get(key.as_slice())? else {
             return Ok(None);
         };
@@ -103,7 +82,11 @@ impl<K: KeyType, V> MapW<'_, '_, K, V> {
     /// Removes `k`; `true` when it was present.
     pub fn remove(&mut self, k: &K) -> Result<bool> {
         let key = encode_key(k)?;
-        let had = self.w.table(&self.table)?.remove(key.as_slice())?.is_some();
+        let had = self
+            .w
+            .raw_table(&self.table)?
+            .remove(key.as_slice())?
+            .is_some();
         if had {
             self.w.changes.touch(&self.name, &key);
         }
@@ -131,7 +114,11 @@ impl<K: KeyType, V> MapW<'_, '_, K, V> {
     /// Whether `k` is present.
     pub fn contains(&mut self, k: &K) -> Result<bool> {
         let key = encode_key(k)?;
-        Ok(self.w.table(&self.table)?.get(key.as_slice())?.is_some())
+        Ok(self
+            .w
+            .raw_table(&self.table)?
+            .get(key.as_slice())?
+            .is_some())
     }
 }
 
@@ -154,7 +141,7 @@ impl<'s, K: KeyType, V> MapR<'s, K, V> {
 
     /// The number of entries.
     pub fn len(&self) -> Result<u64> {
-        Ok(match self.s.table(&self.table)? {
+        Ok(match self.s.raw_table(&self.table)? {
             Some(t) => t.len()?,
             None => 0,
         })
@@ -166,49 +153,35 @@ impl<'s, K: KeyType, V> MapR<'s, K, V> {
     }
 
     /// A scan over the whole map; narrow it with the builder.
-    pub fn scan(&self) -> MapScan<'_, 's, K, V> {
-        MapScan {
-            r: self,
-            raw: RawScan::default(),
-            err: None,
-        }
+    pub fn scan(&self) -> Scan<'s, K, (K, V)>
+    where
+        V: DeserializeOwned,
+    {
+        Scan::new(
+            self.s,
+            self.table.clone(),
+            Vec::new(),
+            Box::new(|k, v| Ok((K::from_key(k)?, decode_value(v)?))),
+        )
     }
 
-    /// Counts the entries under a key prefix, stopping at `max` (the
-    /// flag says whether it stopped).
-    pub fn count_prefix<P: KeyType>(&self, prefix: &P, max: u64) -> Result<(u64, bool)> {
-        check_prefix::<K, P>()?;
-        let raw = RawScan {
-            prefix: prefix.to_key(),
-            limit: usize::try_from(max).unwrap_or(usize::MAX),
-            ..Default::default()
-        };
-        let (items, next) = raw.run(self.s.table(&self.table)?.as_deref())?;
-        Ok((items.len() as u64, next.is_some()))
+    /// A scan yielding raw [`crate::Value`]s.
+    pub fn scan_values(&self) -> Scan<'s, K, (K, crate::Value)> {
+        Scan::new(
+            self.s,
+            self.table.clone(),
+            Vec::new(),
+            Box::new(|k, v| Ok((K::from_key(k)?, vbin::decode(v)?))),
+        )
     }
-}
 
-fn check_prefix<K: KeyType, P: KeyType>() -> Result<()> {
-    let k = K::kinds();
-    let p = P::kinds();
-    if p.len() > k.len() || k[..p.len()] != p[..] {
-        return Err(Error::Key(format!(
-            "{} is not a prefix of the key {}",
-            kinds_str(&p),
-            kinds_str(&k)
-        )));
-    }
-    Ok(())
-}
-
-impl<K: KeyType, V> MapR<'_, K, V> {
     /// The value at `k`.
     pub fn get(&self, k: &K) -> Result<Option<V>>
     where
         V: DeserializeOwned,
     {
         let key = encode_key(k)?;
-        let Some(t) = self.s.table(&self.table)? else {
+        let Some(t) = self.s.raw_table(&self.table)? else {
             return Ok(None);
         };
         let Some(g) = t.get(key.as_slice())? else {
@@ -220,7 +193,7 @@ impl<K: KeyType, V> MapR<'_, K, V> {
     /// The raw [`crate::Value`] at `k`.
     pub fn get_value(&self, k: &K) -> Result<Option<crate::Value>> {
         let key = encode_key(k)?;
-        let Some(t) = self.s.table(&self.table)? else {
+        let Some(t) = self.s.raw_table(&self.table)? else {
             return Ok(None);
         };
         let Some(g) = t.get(key.as_slice())? else {
@@ -232,74 +205,9 @@ impl<K: KeyType, V> MapR<'_, K, V> {
     /// Whether `k` is present.
     pub fn contains(&self, k: &K) -> Result<bool> {
         let key = encode_key(k)?;
-        let Some(t) = self.s.table(&self.table)? else {
+        let Some(t) = self.s.raw_table(&self.table)? else {
             return Ok(false);
         };
         Ok(t.get(key.as_slice())?.is_some())
-    }
-}
-
-/// A scan over a map, built then run.
-pub struct MapScan<'r, 's, K, V> {
-    r: &'r MapR<'s, K, V>,
-    raw: RawScan,
-    err: Option<Error>,
-}
-
-impl<K: KeyType, V: DeserializeOwned> MapScan<'_, '_, K, V> {
-    /// Only keys whose leading parts equal `prefix`.
-    pub fn prefix<P: KeyType>(mut self, prefix: &P) -> Self {
-        if let Err(e) = check_prefix::<K, P>() {
-            self.err = Some(e);
-        }
-        self.raw.prefix = prefix.to_key();
-        self
-    }
-
-    /// Only keys at or above `k`.
-    pub fn from(mut self, k: &K) -> Self {
-        self.raw.from = Some(k.to_key());
-        self
-    }
-
-    /// Only keys at or below `k`.
-    pub fn to(mut self, k: &K) -> Self {
-        self.raw.to = Some(k.to_key());
-        self
-    }
-
-    /// Continues after the key a previous page ended with.
-    pub fn after(mut self, cursor: &Cursor) -> Self {
-        self.raw.after = Some(cursor.0.clone());
-        self
-    }
-
-    /// Descending order.
-    pub fn reverse(mut self) -> Self {
-        self.raw.reverse = true;
-        self
-    }
-
-    /// At most `n` entries (0 = all).
-    pub fn limit(mut self, n: usize) -> Self {
-        self.raw.limit = n;
-        self
-    }
-
-    /// Runs the scan.
-    pub fn run(self) -> Result<Page<(K, V)>> {
-        if let Some(e) = self.err {
-            return Err(e);
-        }
-        let (items, next) = self.raw.run(self.r.s.table(&self.r.table)?.as_deref())?;
-        let mut out = Vec::with_capacity(items.len());
-        for (k, v) in items {
-            out.push((K::from_key(&k)?, decode_value(&v)?));
-        }
-        Ok(Page {
-            items: out,
-            next,
-            checkpoint: self.r.s.checkpoint(),
-        })
     }
 }

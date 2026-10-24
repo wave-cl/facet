@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc cf59b7d802897c4de6e9a1ab6b5a2c80ab493d24feab0b81fd97aa23bd7c4123 # shrinks to batches = [[TableUpsert(11, 0, 0, None)], [TableDelete(11)]], page = 1
+cc 165d9190ac70f7739e2855928b086d582d923e2093dc2d31931a6cfaef8c72ee # shrinks to batches = [[ListPushFront(2, 0)], [ListTruncateFront(2, 0)]], page = 1

@@ -82,3 +82,12 @@ pub(crate) fn check_value_len(len: usize) -> Result<()> {
     }
     Ok(())
 }
+
+pub(crate) fn check_elements(n: usize) -> Result<()> {
+    if n > MAX_ELEMENTS_PER_OP {
+        return Err(Error::Limit(format!(
+            "{n} elements in one operation; the most is {MAX_ELEMENTS_PER_OP}"
+        )));
+    }
+    Ok(())
+}

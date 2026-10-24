@@ -16,5 +16,14 @@ crates share one version.
   format drops the projection's collections and zeroes its checkpoint);
   `Projection::apply` runs a batch inside one write transaction and
   commits it with the checkpoint, so a crash never leaves rows ahead of
-  or behind the checkpoint; snapshots for reads; the `register` and `map`
-  collections with prefix, range and paged scans.
+  or behind the checkpoint; snapshots for reads; batch summaries and a
+  checkpoint watch for live queries; limits.
+- The collections: `register`, `counter` (keyed, `i64` or decimal),
+  `set`, `map`, `list` (per partition, sequence-numbered, push at either
+  end, remove, truncate, clear), `table` (typed columns, a primary key,
+  secondary indexes with nullable columns, unique indexes), `sorted set`
+  (per partition, scores `i64`, `u64`, decimal or timestamp; by score,
+  top, rank), `buckets` (count, sum, min and max per key and window for
+  every declared width). Every read handle scans with a prefix, bounds,
+  a direction, a limit and a cursor to page from; typed handles are
+  checked against the declaration.

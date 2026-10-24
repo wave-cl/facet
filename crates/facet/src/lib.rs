@@ -31,6 +31,8 @@ pub mod writer;
 pub use error::{ApplyError, Error, Result};
 pub use keyenc::{KeyKind, KeyPart, KeyTuple, KeyType};
 pub use meta::{Checkpoint, FORMAT, Mark};
+pub use prim::buckets::{Bucket, window_start};
+pub use prim::{Num, Scan, Score};
 pub use projection::Projection;
 pub use reader::{Cursor, Page, Snapshot};
 pub use schema::{
