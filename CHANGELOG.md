@@ -27,3 +27,21 @@ crates share one version.
   every declared width). Every read handle scans with a prefix, bounds,
   a direction, a limit and a cursor to page from; typed handles are
   checked against the declaration.
+- The SDK (feature `runtime`, on by default): `Projection::new(name)
+  .version(..).source(..).on_error(..).collections(|c| ..).on::<T>(tag,
+  handler)`, with typed collection handles handed out at declaration
+  and a `Cx` giving handlers the event and write access inside the
+  batch's transaction; `App` gathers projections.
+- The runtime: `Runtime::start(app, options)` connects to chron
+  (`connect_any` over the seeds), opens the store bound to the chron
+  database id (refusing another one unless `rebind`), registers every
+  projection and runs one task each: a resume check (the database id,
+  the floor, the confirmed head and a crc32 fingerprint of the last
+  applied event, so a replaced or shortened log rebuilds the
+  projection), a confirmed subscription from the checkpoint, batches of
+  up to 256 events or 4 MiB applied inside one transaction with the
+  checkpoint, reconnection with backoff and rediscovery, `pause`,
+  `resume` and `rebuild`. `OnError::Skip` reruns a failed batch with
+  the failing event recorded in the `__dead` table; `OnError::Fail`
+  stops the projection before it. A `Handle` reads snapshots, statuses,
+  waits for a position (`wait_for`) and follows batch summaries.

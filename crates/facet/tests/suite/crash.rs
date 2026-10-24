@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use facet::{Error, Fsync, Options, Projection, Store};
+use facet::{Error, Fsync, Options, ProjectionData, Store};
 
 use crate::common::*;
 
@@ -20,7 +20,7 @@ fn child_store(dir: &str, fsync: Fsync) -> Store {
 
 /// Batch `i` (checkpoint `next = i + 1`) writes `m[i] = 2i`, `m[i + K]`
 /// for a second key range, and `r = i`: every table moves every batch.
-fn batch(p: &Projection, i: u64) {
+fn batch(p: &ProjectionData, i: u64) {
     p.apply::<_, Error>(cp(i + 1), |w| {
         let mut m = w.map::<u64, u64>("m")?;
         m.put(&i, &(i * 2))?;
@@ -66,7 +66,7 @@ impl Drop for KillOnDrop {
 /// Every row is derivable from the checkpoint: the map holds exactly the
 /// keys below `next` (in both ranges) with the right values, and the
 /// register holds `next - 1`.
-pub fn check_invariant(p: &Projection) -> Result<(), String> {
+pub fn check_invariant(p: &ProjectionData) -> Result<(), String> {
     let snap = p.snapshot().unwrap();
     let next = snap.checkpoint().next;
     let m = snap.map::<u64, u64>("m").unwrap();

@@ -22,9 +22,18 @@ all-features = true
 
 [features]
 default = ["runtime"]
-# The projection SDK and the runtime that tails chron (added in a later
-# commit); without it the crate is the engine alone.
-runtime = []
+# The projection SDK and the runtime that tails chron; without it the
+# crate is the engine alone.
+runtime = [
+    "dep:chron-client",
+    "dep:futures",
+    "dep:crc32fast",
+    "dep:tokio-util",
+    "dep:tracing",
+    "tokio/rt-multi-thread",
+    "tokio/macros",
+    "tokio/time",
+]
 
 [dependencies]
 redb = { workspace = true }
@@ -36,15 +45,29 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
+chron-client = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+crc32fast = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
 proptest = { workspace = true }
 criterion = { workspace = true }
+chrond = { workspace = true, features = ["test-util"] }
+chron-client = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+futures = { workspace = true }
 
 [[test]]
 name = "suite"
 path = "tests/suite/main.rs"
+
+[[test]]
+name = "runtime"
+path = "tests/runtime/main.rs"
+required-features = ["runtime"]
 
 [[bench]]
 name = "facet"

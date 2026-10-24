@@ -76,18 +76,18 @@ impl ProjectionInner {
 /// A registered projection: the handle batches, reads and rebuilds go
 /// through. Cheap to clone; the file closes when the last clone drops.
 #[derive(Clone)]
-pub struct Projection(pub(crate) Arc<ProjectionInner>);
+pub struct ProjectionData(pub(crate) Arc<ProjectionInner>);
 
-impl std::fmt::Debug for Projection {
+impl std::fmt::Debug for ProjectionData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Projection")
+        f.debug_struct("ProjectionData")
             .field("name", &self.0.decl.name)
             .field("checkpoint", &self.0.checkpoint())
             .finish()
     }
 }
 
-impl Projection {
+impl ProjectionData {
     /// The projection's name.
     pub fn name(&self) -> &str {
         &self.0.decl.name

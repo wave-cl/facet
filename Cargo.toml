@@ -55,6 +55,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chron-client = "0.7"
 chrond = "0.7"
+chron-proto = "0.7"
 proptest = "1"
 tempfile = "3"
 assert_cmd = "2"

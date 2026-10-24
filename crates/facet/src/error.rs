@@ -96,7 +96,7 @@ pub enum Error {
 /// `Result` with the engine's error.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-/// What [`crate::Projection::apply`] returns when the batch did not
+/// What [`crate::ProjectionData::apply`] returns when the batch did not
 /// commit.
 #[derive(Debug, thiserror::Error)]
 pub enum ApplyError<E> {

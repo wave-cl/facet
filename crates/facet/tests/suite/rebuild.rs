@@ -1,11 +1,11 @@
 //! The rebuild rule at registration, binding to the chron database, and
-//! `Projection::rebuild`.
+//! `ProjectionData::rebuild`.
 
 use facet::{Changed, Error, OnDbMismatch, Rebuilt, Uuid};
 
 use crate::common::*;
 
-fn fill(p: &facet::Projection) {
+fn fill(p: &facet::ProjectionData) {
     p.apply::<_, Error>(cp(10), |w| {
         w.register("r")?.set(&"v")?;
         w.map::<u64, i64>("m")?.put(&1, &1)
@@ -13,7 +13,7 @@ fn fill(p: &facet::Projection) {
     .unwrap();
 }
 
-fn rows(p: &facet::Projection) -> (Option<String>, u64) {
+fn rows(p: &facet::ProjectionData) -> (Option<String>, u64) {
     let snap = p.snapshot().unwrap();
     (
         snap.register::<String>("r").unwrap().get().unwrap(),

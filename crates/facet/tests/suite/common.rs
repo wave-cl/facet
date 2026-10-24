@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use facet::{
-    Checkpoint, CollectionDecl, CollectionKind, Fsync, KeyKind, KeySchema, Options, Projection,
+    Checkpoint, CollectionDecl, CollectionKind, Fsync, KeyKind, KeySchema, Options, ProjectionData,
     ProjectionDecl, Store, TypeSchema, Uuid, ValueSchema,
 };
 
@@ -71,7 +71,7 @@ pub fn simple_decl(version: &str) -> ProjectionDecl {
     )
 }
 
-pub fn open_simple(dir: impl AsRef<Path>) -> (Store, Projection) {
+pub fn open_simple(dir: impl AsRef<Path>) -> (Store, ProjectionData) {
     let s = store(dir);
     let (p, _) = s.register(&simple_decl("1")).unwrap();
     (s, p)

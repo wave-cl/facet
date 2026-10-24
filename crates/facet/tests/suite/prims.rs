@@ -126,7 +126,7 @@ fn txn(id: u128, account: u128, amount: &str, note: Option<&str>, code: i64) -> 
     }
 }
 
-fn open_all(dir: &std::path::Path) -> (facet::Store, facet::Projection) {
+fn open_all(dir: &std::path::Path) -> (facet::Store, facet::ProjectionData) {
     let s = store(dir);
     let (p, _) = s.register(&all_kinds_decl("1")).unwrap();
     (s, p)

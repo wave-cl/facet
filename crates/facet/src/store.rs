@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex, Weak};
 use redb::{Database, ReadableDatabase};
 use uuid::Uuid;
 
+use crate::data::{ProjectionData, ProjectionInner};
 use crate::error::{Error, Result};
 use crate::meta::{self, Checkpoint, FORMAT};
-use crate::projection::{Projection, ProjectionInner};
 use crate::schema::ProjectionDecl;
 
 /// Whether every batch is flushed to disk before it is acknowledged.
@@ -197,7 +197,7 @@ impl Store {
     /// one durable transaction. A file bound to another chron database is
     /// refused unless the options say to rebuild. A projection with a live
     /// handle cannot be registered again (`InUse`).
-    pub fn register(&self, decl: &ProjectionDecl) -> Result<(Projection, Registered)> {
+    pub fn register(&self, decl: &ProjectionDecl) -> Result<(ProjectionData, Registered)> {
         decl.validate()?;
         let mut open = self.0.open.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(w) = open.get(&decl.name)
@@ -266,7 +266,7 @@ impl Store {
         ));
         open.insert(decl.name.clone(), Arc::downgrade(&inner));
         Ok((
-            Projection(inner),
+            ProjectionData(inner),
             Registered {
                 rebuilt: reason.unwrap_or(Rebuilt::No),
                 checkpoint,

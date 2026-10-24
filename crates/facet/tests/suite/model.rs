@@ -386,7 +386,7 @@ fn walk<'s, K: KeyType, T>(
     }
 }
 
-fn check(p: &facet::Projection, m: &Model, page: usize) {
+fn check(p: &facet::ProjectionData, m: &Model, page: usize) {
     let snap = p.snapshot().unwrap();
     // map
     let map = snap.map::<u64, i64>("m").unwrap();
