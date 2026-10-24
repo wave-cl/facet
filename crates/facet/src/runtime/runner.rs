@@ -1,12 +1,12 @@
-//! One projection's task: resume, subscribe, batch, apply; reconnect on
-//! errors; pause, resume and rebuild on request.
+//! One projection's task: resume, take batches from its source's tail
+//! (or read what the ring no longer holds), apply; fail, pause, resume
+//! and rebuild on request.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use chron_client::{Client, ClientError, Consistency, EventStream, ReadOptions, Source};
-use futures::{FutureExt, StreamExt};
+use chron_client::{Client, ClientError, Consistency, Event, ReadOptions, Source};
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -15,7 +15,9 @@ use super::apply::{self, BatchError, apply_batch};
 use super::deadletter::{DEAD_LETTERS, DeadLetter};
 use super::options::RuntimeOptions;
 use super::projection::{OnError, Projection};
+use super::ring::Take;
 use super::status::{Control, State, Status};
+use super::tail::{Tail, TailState};
 use crate::data::ProjectionData;
 
 pub(crate) struct RunnerCtx {
@@ -27,14 +29,15 @@ pub(crate) struct RunnerCtx {
     pub status: watch::Sender<Status>,
     pub control: mpsc::Receiver<Control>,
     pub head: watch::Receiver<u64>,
+    pub fatal: watch::Receiver<Option<String>>,
+    pub tail: Arc<Tail>,
+    pub tail_state: watch::Receiver<TailState>,
     pub cancel: CancellationToken,
 }
 
 /// What the resume check decided.
 enum Resume {
-    /// Carry on from the checkpoint.
     Continue,
-    /// Drop everything and start over, for this reason.
     Rebuild(String),
 }
 
@@ -42,9 +45,12 @@ enum Resume {
 enum Stop {
     /// Wait for an operator.
     Failed(String),
-    /// Try again after a delay (and a rediscovery).
+    /// Try again after a delay.
     Transient(String),
 }
+
+/// How long a runner waits for a signal before looking again anyway.
+const IDLE_WAIT: Duration = Duration::from_secs(2);
 
 fn confirmed() -> ReadOptions {
     ReadOptions {
@@ -91,11 +97,8 @@ impl RunnerCtx {
             )));
         }
         let cp = self.data.checkpoint();
-        if cp.next < info.floor {
-            return Err(Stop::Failed(format!(
-                "retention passed the checkpoint: the floor is {} and the next position to apply {}; rebuild to start from the floor",
-                info.floor, cp.next
-            )));
+        if cp.next < info.floor && cp.last.is_some() {
+            return Err(Stop::Failed(floor_message(info.floor, cp.next)));
         }
         let head = self
             .client
@@ -143,43 +146,35 @@ impl RunnerCtx {
         }
     }
 
-    async fn subscribe(&self, source: &Source) -> Result<EventStream, Stop> {
-        let from = self.data.checkpoint().next;
-        match self
-            .client
-            .subscribe_source(source.clone(), from, Consistency::Confirmed)
-            .await
-        {
-            Ok(s) => Ok(s),
-            Err(ClientError::NotFound(m)) => Err(Stop::Failed(format!(
-                "the source does not exist: {m} (a stream facet defines itself comes in a later version)"
-            ))),
-            Err(ClientError::BelowFloor { floor, .. }) => Err(Stop::Failed(format!(
-                "retention passed the checkpoint: the floor is {floor} and the next position to apply {from}; rebuild to start from the floor"
-            ))),
-            Err(e) => Err(Stop::Transient(e.to_string())),
-        }
-    }
-
-    fn classify_stream_error(&self, e: ClientError) -> Stop {
-        match e {
-            ClientError::CutBack { position, .. } => {
-                if self.data.checkpoint().next > position {
-                    Stop::Failed(format!(
-                        "confirmed position {} was cut back to {position}; rebuild to start over",
-                        self.data.checkpoint().next
-                    ))
-                } else {
-                    Stop::Transient(format!(
-                        "the node was cut back to {position}; resubscribing"
-                    ))
-                }
+    /// Reads the next page straight from chron (the ring does not reach
+    /// back to the checkpoint).
+    async fn catch_up(&self, from: u64) -> Result<Vec<Event>, Stop> {
+        let limit = self.opts.batch_events;
+        let r = match &self.tail.source {
+            Source::All => self.client.read_all_with(from, limit, confirmed()).await,
+            Source::Tag(t) => {
+                self.client
+                    .read_tag_with(t.clone(), from, limit, confirmed())
+                    .await
             }
-            ClientError::BelowFloor { floor, position } => Stop::Failed(format!(
-                "retention passed the checkpoint: the floor is {floor} and the next position to apply {position}; rebuild to start from the floor"
-            )),
-            ClientError::NotFound(m) => Stop::Failed(format!("the source is gone: {m}")),
-            other => Stop::Transient(other.to_string()),
+            Source::Stream(n) => {
+                self.client
+                    .read_stream_with(n, from, limit, confirmed())
+                    .await
+            }
+        };
+        match r {
+            Ok(events) => Ok(events),
+            Err(ClientError::PositionOutOfRange { .. }) => Ok(Vec::new()),
+            Err(ClientError::BelowFloor { floor, position }) => {
+                Err(Stop::Failed(floor_message(floor, position)))
+            }
+            // Whether a missing stream is gone or not yet defined is the
+            // tail's call (it ends, or defines it and connects).
+            Err(ClientError::NotFound(m)) => {
+                Err(Stop::Transient(format!("waiting for the source: {m}")))
+            }
+            Err(e) => Err(Stop::Transient(e.to_string())),
         }
     }
 
@@ -235,9 +230,9 @@ impl RunnerCtx {
         Err("the batch kept failing after every event was skipped".into())
     }
 
-    /// Handles one control message while running; `true` when the
-    /// current subscription must be dropped and the loop restarted.
-    async fn on_control(&self, c: Control) -> bool {
+    /// Handles one control message while running; `true` when the loop
+    /// must restart from the top.
+    fn on_control(&self, c: Control) -> bool {
         match c {
             Control::Pause => {
                 self.set_state(State::Paused);
@@ -266,7 +261,8 @@ impl RunnerCtx {
         }
     }
 
-    /// Waits for an operator while failed or paused.
+    /// Waits for an operator while failed or paused; `None` when the
+    /// runtime stops.
     async fn wait_control(&mut self) -> Option<()> {
         loop {
             tokio::select! {
@@ -274,21 +270,58 @@ impl RunnerCtx {
                 c = self.control.recv() => match c {
                     None => return None,
                     Some(Control::Pause) => { self.set_state(State::Paused); }
-                    Some(c) => { self.on_control(c).await; return Some(()); }
+                    Some(c) => { self.on_control(c); return Some(()); }
                 }
             }
         }
     }
+
+    /// What stops the loop right now, if anything: the runtime's fatal
+    /// error, the tail's end, a cut-back past the checkpoint, retention
+    /// past it.
+    fn blocked(&self) -> Option<String> {
+        if let Some(f) = self.fatal.borrow().as_ref() {
+            return Some(f.clone());
+        }
+        let ts = self.tail_state.borrow();
+        if let Some(e) = &ts.ended {
+            return Some(e.clone());
+        }
+        let next = self.data.checkpoint().next;
+        if let Some(p) = ts.cut_back
+            && next > p
+        {
+            return Some(format!(
+                "confirmed position {next} was cut back to {p}; rebuild to start over"
+            ));
+        }
+        None
+    }
+
+    /// Sleeps until something changes: an event in the ring, the tail's
+    /// state, a control message, the runtime stopping, or the idle wait.
+    /// `Some(true)` to restart the outer loop, `None` to stop.
+    async fn wait_signal(&mut self) -> Option<bool> {
+        tokio::select! {
+            _ = self.cancel.cancelled() => None,
+            c = self.control.recv() => c.map(|c| self.on_control(c)),
+            _ = self.tail_state.changed() => Some(false),
+            _ = self.fatal.changed() => Some(false),
+            _ = tokio::time::sleep(IDLE_WAIT) => Some(false),
+        }
+    }
 }
 
-use chron_client::Event;
+fn floor_message(floor: u64, next: u64) -> String {
+    format!(
+        "retention passed the checkpoint: the floor is {floor} and the next position to apply {next}; rebuild to start from the floor"
+    )
+}
 
 pub(crate) async fn run(mut ctx: RunnerCtx) {
-    let source = ctx.def.resolved_source();
     let max_events = ctx.opts.batch_events;
     let max_bytes = ctx.opts.batch_bytes;
     let mut backoff = ctx.opts.reconnect_min;
-    let mut first = true;
     'outer: loop {
         if ctx.cancel.is_cancelled() {
             ctx.set_state(State::Stopped);
@@ -302,11 +335,12 @@ pub(crate) async fn run(mut ctx: RunnerCtx) {
             }
             continue;
         }
-        if !first {
-            ctx.set(|s| s.reconnects += 1);
+        // Mark the tail's state as seen so the next change wakes us.
+        ctx.tail_state.borrow_and_update();
+        if let Some(msg) = ctx.blocked() {
+            ctx.fail(msg);
+            continue;
         }
-        first = false;
-        // Resume check.
         match ctx.resume_check().await {
             Ok(Resume::Continue) => {}
             Ok(Resume::Rebuild(reason)) => {
@@ -328,124 +362,98 @@ pub(crate) async fn run(mut ctx: RunnerCtx) {
             }
             Err(Stop::Transient(m)) => {
                 ctx.set(|s| s.error = Some(m));
-                if !pause_and_rediscover(&mut ctx, &mut backoff).await {
-                    return;
+                tokio::select! {
+                    _ = ctx.cancel.cancelled() => { ctx.set_state(State::Stopped); return; }
+                    _ = tokio::time::sleep(backoff) => {}
                 }
+                backoff = (backoff * 2).min(ctx.opts.reconnect_max);
                 continue;
             }
         }
-        let mut stream = match ctx.subscribe(&source).await {
-            Ok(s) => s,
-            Err(Stop::Failed(m)) => {
-                ctx.fail(m);
-                continue;
-            }
-            Err(Stop::Transient(m)) => {
-                ctx.set(|s| s.error = Some(m));
-                if !pause_and_rediscover(&mut ctx, &mut backoff).await {
-                    return;
-                }
-                continue;
-            }
-        };
         backoff = ctx.opts.reconnect_min;
         ctx.set(|s| {
             s.state = State::CatchingUp;
             s.error = None;
         });
         loop {
-            let first_event = tokio::select! {
-                _ = ctx.cancel.cancelled() => {
-                    ctx.set_state(State::Stopped);
-                    return;
-                }
-                c = ctx.control.recv() => {
-                    match c {
-                        None => { ctx.set_state(State::Stopped); return; }
-                        Some(c) => {
-                            if ctx.on_control(c).await { continue 'outer; }
-                            continue;
-                        }
-                    }
-                }
-                ev = stream.next() => ev,
-            };
-            let mut batch = Vec::with_capacity(max_events.min(1024));
-            let mut bytes = 0usize;
-            let mut pending_error = None;
-            match first_event {
-                None => {
-                    pending_error = Some(ClientError::Unavailable("the subscription ended".into()));
-                }
-                Some(Err(e)) => pending_error = Some(e),
-                Some(Ok(ev)) => {
-                    bytes += ev.payload.len();
-                    batch.push(ev);
-                    while batch.len() < max_events && bytes < max_bytes {
-                        match stream.next().now_or_never() {
-                            None => break,
-                            Some(None) => {
-                                pending_error =
-                                    Some(ClientError::Unavailable("the subscription ended".into()));
-                                break;
-                            }
-                            Some(Some(Err(e))) => {
-                                pending_error = Some(e);
-                                break;
-                            }
-                            Some(Some(Ok(ev))) => {
-                                bytes += ev.payload.len();
-                                batch.push(ev);
-                            }
-                        }
-                    }
-                }
+            if let Some(msg) = ctx.blocked() {
+                ctx.fail(msg);
+                continue 'outer;
             }
-            if !batch.is_empty() {
-                let full = batch.len() >= max_events || bytes >= max_bytes;
-                if let Err(m) = ctx.apply(batch).await {
-                    ctx.fail(m);
-                    continue 'outer;
-                }
-                let head = *ctx.head.borrow();
+            {
+                let ts = ctx.tail_state.borrow_and_update();
+                let reconnects = ts.reconnects;
+                let err = if ts.connected { None } else { ts.error.clone() };
+                drop(ts);
                 ctx.set(|s| {
-                    s.chron_head = head.max(s.checkpoint.next);
-                    s.state = if full { State::CatchingUp } else { State::Live };
+                    s.reconnects = reconnects;
+                    if let Some(e) = err {
+                        s.error = Some(e);
+                    }
                 });
             }
-            if let Some(e) = pending_error {
-                match ctx.classify_stream_error(e) {
-                    Stop::Failed(m) => {
+            let cp = ctx.data.checkpoint();
+            // Nothing applied yet: start where the log starts.
+            let next = if cp.last.is_none() {
+                cp.next.max(ctx.tail_state.borrow().floor)
+            } else {
+                cp.next
+            };
+            let took = ctx.tail.ring.take_from(next, max_events, max_bytes);
+            let (batch, from_ring) = match took {
+                Take::Events(b) => (b, true),
+                Take::Empty => (Vec::new(), true),
+                Take::Behind => match ctx.catch_up(next).await {
+                    Ok(b) => (b, false),
+                    Err(Stop::Failed(m)) => {
                         ctx.fail(m);
                         continue 'outer;
                     }
-                    Stop::Transient(m) => {
+                    Err(Stop::Transient(m)) => {
                         ctx.set(|s| s.error = Some(m));
-                        drop(stream);
-                        if !pause_and_rediscover(&mut ctx, &mut backoff).await {
-                            return;
+                        tokio::select! {
+                            _ = ctx.cancel.cancelled() => { ctx.set_state(State::Stopped); return; }
+                            _ = tokio::time::sleep(backoff) => {}
                         }
-                        continue 'outer;
+                        backoff = (backoff * 2).min(ctx.opts.reconnect_max);
+                        continue;
                     }
+                },
+            };
+            backoff = ctx.opts.reconnect_min;
+            if batch.is_empty() {
+                // Caught up with what the ring holds (or with chron).
+                let head = *ctx.head.borrow();
+                let connected = ctx.tail_state.borrow().connected;
+                ctx.set(|s| {
+                    s.chron_head = head.max(s.checkpoint.next);
+                    if connected && from_ring {
+                        s.state = State::Live;
+                    }
+                });
+                match ctx.wait_signal().await {
+                    None => {
+                        ctx.set_state(State::Stopped);
+                        return;
+                    }
+                    Some(true) => continue 'outer,
+                    Some(false) => continue,
                 }
             }
+            let full = batch.len() >= max_events;
+            if let Err(m) = ctx.apply(batch).await {
+                ctx.fail(m);
+                continue 'outer;
+            }
+            let head = *ctx.head.borrow();
+            ctx.set(|s| {
+                s.chron_head = head.max(s.checkpoint.next);
+                s.state = if full || !from_ring {
+                    State::CatchingUp
+                } else {
+                    State::Live
+                };
+            });
         }
     }
-}
-
-/// Sleeps the backoff (doubling it) and looks for the leader again;
-/// `false` when the runtime is stopping.
-async fn pause_and_rediscover(ctx: &mut RunnerCtx, backoff: &mut Duration) -> bool {
-    tokio::select! {
-        _ = ctx.cancel.cancelled() => {
-            ctx.set_state(State::Stopped);
-            return false;
-        }
-        _ = tokio::time::sleep(*backoff) => {}
-    }
-    *backoff = (*backoff * 2).min(ctx.opts.reconnect_max);
-    if let Err(e) = ctx.client.rediscover().await {
-        tracing::debug!(projection = %ctx.def.name(), error = %e, "rediscover");
-    }
-    true
 }

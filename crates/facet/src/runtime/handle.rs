@@ -13,6 +13,22 @@ use crate::meta::Checkpoint;
 use crate::reader::Snapshot;
 use crate::watch::BatchSummary;
 
+/// One source's subscription as the runtime sees it.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct SourceStatus {
+    /// The source.
+    pub source: chron_client::Source,
+    /// Whether a subscription is open.
+    pub connected: bool,
+    /// Times it was opened again after an error.
+    pub reconnects: u64,
+    /// The last error, or why the tail ended.
+    pub error: Option<String>,
+    /// Events held in the ring.
+    pub buffered: usize,
+}
+
 /// Reads a runtime's projections. Cheap to clone; stays usable until the
 /// runtime shuts down.
 #[derive(Clone)]
@@ -112,6 +128,24 @@ impl Handle {
                 at_least,
             }),
         }
+    }
+
+    /// The sources the runtime follows, one tail each.
+    pub fn sources(&self) -> Vec<SourceStatus> {
+        self.shared
+            .tails
+            .iter()
+            .map(|t| {
+                let s = t.state.borrow();
+                SourceStatus {
+                    source: t.source.clone(),
+                    connected: s.connected,
+                    reconnects: s.reconnects,
+                    error: s.error.clone().or_else(|| s.ended.clone()),
+                    buffered: t.ring.len(),
+                }
+            })
+            .collect()
     }
 
     /// chron's confirmed head as the runtime last saw it.

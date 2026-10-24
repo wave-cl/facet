@@ -45,3 +45,17 @@ crates share one version.
   the failing event recorded in the `__dead` table; `OnError::Fail`
   stops the projection before it. A `Handle` reads snapshots, statuses,
   waits for a position (`wait_for`) and follows batch summaries.
+- One subscription per source, shared by every projection on it: a tail
+  fills a ring of recent events; a projection whose checkpoint the ring
+  no longer reaches back to reads its pages from chron until it catches
+  up. On a stream error the tail backs off, looks for the leader again
+  and resubscribes from the lowest checkpoint among its projections; a
+  cut-back past a projection's checkpoint, a vanished explicit stream,
+  or a changed chron database fails the projections it concerns. An
+  `Auto` source over several event types is the chron stream
+  `facet-<projection>`, which the runtime defines at start (a stream of
+  that name with other tags is refused, or recreated under
+  `StreamPolicy::Recreate`) and defines again when it is deleted.
+  Retention that passed a projection's checkpoint fails it; a rebuild,
+  or a projection with nothing applied yet, starts at the floor.
+  `Handle::sources` reports every tail.

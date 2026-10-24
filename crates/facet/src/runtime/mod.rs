@@ -18,9 +18,12 @@ mod error;
 mod handle;
 mod options;
 mod projection;
+#[doc(hidden)]
+pub mod ring;
 mod rt;
 mod runner;
 mod status;
+mod tail;
 
 pub use app::App;
 pub use apply::fingerprint;
@@ -31,7 +34,7 @@ pub use collections::{
 pub use cx::Cx;
 pub use deadletter::{DEAD_LETTERS, DeadLetter};
 pub use error::{HandlerError, RuntimeError};
-pub use handle::Handle;
+pub use handle::{Handle, SourceStatus};
 pub use options::RuntimeOptions;
 pub use projection::{Codec, OnError, Projection, ProjectionBuilder, Source, StreamPolicy};
 pub use rt::Runtime;
