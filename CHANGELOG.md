@@ -6,6 +6,10 @@ crates share one version.
 
 ## Unreleased
 
+Nothing yet.
+
+## 0.1.0 - 2026-10-23
+
 ### facet-db
 
 - The engine: one redb file per projection under a store directory bound
