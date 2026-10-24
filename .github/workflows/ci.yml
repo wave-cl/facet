@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # cargo resolves rust-toolchain.toml (1.98.0, clippy, rustfmt) itself;
+      # the version is printed so a green run shows what it checked with.
+      - uses: dtolnay/rust-toolchain@stable
+      - run: rustc --version && cargo --version
+
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+
+      - run: cargo fmt --all --check
+      # The library without its runtime: a workspace build unifies the
+      # daemon's features onto it, so only a package-scoped build proves
+      # the engine alone compiles.
+      - run: cargo clippy -p facet-db --no-default-features --all-targets -- -D warnings
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo nextest run --workspace --all-features --no-fail-fast
+
+      # Every push proves the crates package: readme paths, versions on
+      # path dependencies, stripped dev-dependencies.
+      - run: cargo package --workspace --locked

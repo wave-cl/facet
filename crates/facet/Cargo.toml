@@ -1,0 +1,51 @@
+[package]
+name = "facet-db"
+description = "Projection database over chron: sets, maps, lists, tables, sorted sets and time buckets kept by Rust projections over an event log"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme = "../../README.md"
+documentation = "https://docs.rs/facet-db"
+keywords = ["event-sourcing", "cqrs", "projections", "read-model", "database"]
+categories = ["database-implementations"]
+
+# The crates.io name `facet` is taken; the library target keeps the name
+# so code says `use facet::`.
+[lib]
+name = "facet"
+path = "src/lib.rs"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = ["runtime"]
+# The projection SDK and the runtime that tails chron (added in a later
+# commit); without it the crate is the engine alone.
+runtime = []
+
+[dependencies]
+redb = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+bytes = { workspace = true, features = ["serde"] }
+rust_decimal = { workspace = true }
+jiff = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+proptest = { workspace = true }
+criterion = { workspace = true }
+
+[[test]]
+name = "suite"
+path = "tests/suite/main.rs"
+
+[[bench]]
+name = "facet"
+harness = false
