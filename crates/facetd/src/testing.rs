@@ -87,6 +87,15 @@ impl Fixture {
             .expect("metrics enabled")
     }
 
+    /// Where the HTTP gateway is served, when enabled.
+    pub fn http_addr(&self) -> SocketAddr {
+        self.running
+            .as_ref()
+            .expect("running")
+            .http_addr
+            .expect("http enabled")
+    }
+
     /// The chron address.
     pub fn chron_addr(&self) -> String {
         format!(

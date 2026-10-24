@@ -79,6 +79,8 @@ pub struct Metrics {
     pub streams_open: IntGaugeVec,
     /// Watchers attached.
     pub watchers: IntGauge,
+    /// HTTP gateway requests by route and status.
+    pub http_requests: IntCounterVec,
     start_time: IntGauge,
 }
 
@@ -107,6 +109,14 @@ impl Metrics {
         .expect("valid opts");
         let watchers =
             IntGauge::new("facet_watchers", "Watch streams attached").expect("valid opts");
+        let http_requests = IntCounterVec::new(
+            Opts::new(
+                "facet_http_requests_total",
+                "HTTP gateway requests by route and status",
+            ),
+            &["route", "status"],
+        )
+        .expect("valid opts");
         let start_time = IntGauge::new(
             "facet_start_time_seconds",
             "When the daemon started, unix seconds",
@@ -123,6 +133,7 @@ impl Metrics {
             Box::new(rpc_duration.clone()),
             Box::new(streams_open.clone()),
             Box::new(watchers.clone()),
+            Box::new(http_requests.clone()),
             Box::new(start_time.clone()),
             Box::new(RuntimeCollector::new(handle)),
         ] {
@@ -134,6 +145,7 @@ impl Metrics {
             rpc_duration,
             streams_open,
             watchers,
+            http_requests,
             start_time,
         }
     }

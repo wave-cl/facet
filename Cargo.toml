@@ -5,6 +5,7 @@ members = [
     "crates/facet-proto",
     "crates/facet-client",
     "crates/facetd",
+    "crates/facet-cli",
 ]
 
 [workspace.package]

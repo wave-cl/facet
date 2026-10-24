@@ -1,0 +1,806 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "facet HTTP gateway",
+    "version": "0.1.0",
+    "description": "JSON over HTTP/1.1 for clients without gRPC. Every /v1 route needs `Authorization: Bearer <token>` when the daemon has a token; admin routes need the admin token. Keys are JSON arrays of their parts (a single part may be given bare); decimals, UUIDs and timestamps are strings, bytes are base64. Every read carries `seen`: the checkpoint, the projection's state and chron's head. Errors are `{\"error\", \"code\"}` plus `checkpoint`, `chron_head`, `at_least` or `position` where the daemon sets them; a read whose `at_least` was not reached in time is a 504."
+  },
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "security": [
+    {
+      "bearer": []
+    }
+  ],
+  "paths": {
+    "/v1/status": {
+      "get": {
+        "summary": "The daemon: version, uptime, store, chron, counts per state, sources",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/projections": {
+      "get": {
+        "summary": "Every projection, registered or orphaned",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/v1/projections/{projection}": {
+      "get": {
+        "summary": "One projection",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        },
+        "parameters": [
+          {
+            "name": "projection",
+            "in": "path",
+            "required": true,
+            "description": "the projection",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "summary": "Drop an orphaned projection's file",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        },
+        "parameters": [
+          {
+            "name": "projection",
+            "in": "path",
+            "required": true,
+            "description": "the projection",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "description": "Needs the admin token when the daemon has one."
+      }
+    },
+    "/v1/projections/{projection}/rebuild": {
+      "post": {
+        "summary": "Drop the projection's collections and start it over",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        },
+        "parameters": [
+          {
+            "name": "projection",
+            "in": "path",
+            "required": true,
+            "description": "the projection",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "description": "Needs the admin token when the daemon has one."
+      }
+    },
+    "/v1/projections/{projection}/pause": {
+      "post": {
+        "summary": "Pause the projection",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        },
+        "parameters": [
+          {
+            "name": "projection",
+            "in": "path",
+            "required": true,
+            "description": "the projection",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "description": "Needs the admin token when the daemon has one."
+      }
+    },
+    "/v1/projections/{projection}/resume": {
+      "post": {
+        "summary": "Resume a paused or failed projection",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        },
+        "parameters": [
+          {
+            "name": "projection",
+            "in": "path",
+            "required": true,
+            "description": "the projection",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "description": "Needs the admin token when the daemon has one."
+      }
+    },
+    "/v1/projections/{projection}/dead-letters": {
+      "get": {
+        "summary": "Events the projection skipped",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        },
+        "parameters": [
+          {
+            "name": "projection",
+            "in": "path",
+            "required": true,
+            "description": "the projection",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "positions after this one",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "at most this many (default 100)",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/projections/{projection}/{collection}/get": {
+      "get": {
+        "summary": "One entry by its whole key",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        },
+        "parameters": [
+          {
+            "name": "projection",
+            "in": "path",
+            "required": true,
+            "description": "the projection",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "description": "the collection",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "required": false,
+            "description": "JSON: the key's parts (a single part may be bare); empty for a register",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "at_least",
+            "in": "query",
+            "required": false,
+            "description": "wait until the projection applied this position (a chron commit's next)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "wait_ms",
+            "in": "query",
+            "required": false,
+            "description": "how long to wait for it (default 5000, max 30000)",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/projections/{projection}/{collection}/scan": {
+      "get": {
+        "summary": "Entries in key order",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        },
+        "parameters": [
+          {
+            "name": "projection",
+            "in": "path",
+            "required": true,
+            "description": "the projection",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "description": "the collection",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "prefix",
+            "in": "query",
+            "required": false,
+            "description": "JSON: leading key parts every entry shares",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "JSON: entries at or above these leading parts",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "JSON: entries at or below these leading parts",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "the previous page's `next` (base64)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "entries per page (default 100, capped)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "reverse",
+            "in": "query",
+            "required": false,
+            "description": "descending order",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "at_least",
+            "in": "query",
+            "required": false,
+            "description": "wait until the projection applied this position (a chron commit's next)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "wait_ms",
+            "in": "query",
+            "required": false,
+            "description": "how long to wait for it (default 5000, max 30000)",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/projections/{projection}/{collection}/lookup": {
+      "get": {
+        "summary": "A table's rows in the order of a secondary index (keys are the index's)",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        },
+        "parameters": [
+          {
+            "name": "projection",
+            "in": "path",
+            "required": true,
+            "description": "the projection",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "description": "the collection",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "index",
+            "in": "query",
+            "required": true,
+            "description": "the index",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "prefix",
+            "in": "query",
+            "required": false,
+            "description": "JSON: leading index parts",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "JSON",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "JSON",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "the previous page's `next` (base64)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "entries per page (default 100, capped)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "reverse",
+            "in": "query",
+            "required": false,
+            "description": "descending order",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "at_least",
+            "in": "query",
+            "required": false,
+            "description": "wait until the projection applied this position (a chron commit's next)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "wait_ms",
+            "in": "query",
+            "required": false,
+            "description": "how long to wait for it (default 5000, max 30000)",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/projections/{projection}/{collection}/range": {
+      "get": {
+        "summary": "A sorted set's partition in score order (keys are members, values scores)",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        },
+        "parameters": [
+          {
+            "name": "projection",
+            "in": "path",
+            "required": true,
+            "description": "the projection",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "description": "the collection",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "partition",
+            "in": "query",
+            "required": false,
+            "description": "JSON: the partition's parts (empty for one set)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "min",
+            "in": "query",
+            "required": false,
+            "description": "JSON scalar, inclusive",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "max",
+            "in": "query",
+            "required": false,
+            "description": "JSON scalar, inclusive",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "the previous page's `next` (base64)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "entries per page (default 100, capped)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "reverse",
+            "in": "query",
+            "required": false,
+            "description": "descending order",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "at_least",
+            "in": "query",
+            "required": false,
+            "description": "wait until the projection applied this position (a chron commit's next)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "wait_ms",
+            "in": "query",
+            "required": false,
+            "description": "how long to wait for it (default 5000, max 30000)",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/projections/{projection}/{collection}/top": {
+      "get": {
+        "summary": "The highest-scored members of a sorted set's partition",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        },
+        "parameters": [
+          {
+            "name": "projection",
+            "in": "path",
+            "required": true,
+            "description": "the projection",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "description": "the collection",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "partition",
+            "in": "query",
+            "required": false,
+            "description": "JSON",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "how many (default 10)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "at_least",
+            "in": "query",
+            "required": false,
+            "description": "wait until the projection applied this position (a chron commit's next)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "wait_ms",
+            "in": "query",
+            "required": false,
+            "description": "how long to wait for it (default 5000, max 30000)",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/projections/{projection}/{collection}/buckets": {
+      "get": {
+        "summary": "Buckets of one key and width in time order (keys are window starts, values {start, count, sum, min, max})",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        },
+        "parameters": [
+          {
+            "name": "projection",
+            "in": "path",
+            "required": true,
+            "description": "the projection",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "description": "the collection",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "required": false,
+            "description": "JSON: the key's parts",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "width",
+            "in": "query",
+            "required": true,
+            "description": "minute, hour, day or a width in nanoseconds",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "window start, unix nanoseconds, inclusive",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "window start, unix nanoseconds, inclusive",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "the previous page's `next` (base64)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "entries per page (default 100, capped)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "reverse",
+            "in": "query",
+            "required": false,
+            "description": "descending order",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "at_least",
+            "in": "query",
+            "required": false,
+            "description": "wait until the projection applied this position (a chron commit's next)",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "wait_ms",
+            "in": "query",
+            "required": false,
+            "description": "how long to wait for it (default 5000, max 30000)",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/projections/{projection}/{collection}/watch": {
+      "get": {
+        "summary": "Every committed batch's changes to the collection, from now on (server-sent events)",
+        "responses": {
+          "200": {
+            "description": "a text/event-stream of changes: `data:` lines carrying a Change; an `event: error` line ends it"
+          }
+        },
+        "parameters": [
+          {
+            "name": "projection",
+            "in": "path",
+            "required": true,
+            "description": "the projection",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "collection",
+            "in": "path",
+            "required": true,
+            "description": "the collection",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "required": false,
+            "description": "JSON: only this key",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "prefix",
+            "in": "query",
+            "required": false,
+            "description": "JSON: only keys under this prefix",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "summary": "This document",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        }
+      }
+    },
+    "/": {
+      "get": {
+        "summary": "A pointer to this document",
+        "responses": {
+          "200": {
+            "description": "ok"
+          }
+        }
+      }
+    }
+  }
+}

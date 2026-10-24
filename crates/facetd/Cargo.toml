@@ -35,6 +35,8 @@ http-body = { workspace = true }
 http-body-util = { workspace = true }
 pin-project-lite = { workspace = true }
 prometheus = { workspace = true }
+axum = { workspace = true }
+tokio-rustls = { workspace = true }
 subtle = { workspace = true }
 http = { workspace = true }
 serde = { workspace = true }

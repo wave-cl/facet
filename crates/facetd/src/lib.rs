@@ -24,6 +24,8 @@ mod admin_svc;
 pub mod auth;
 mod cli;
 mod codec;
+mod http;
+mod http_json;
 pub mod keys;
 pub mod logging;
 pub mod metrics;
@@ -88,6 +90,9 @@ pub struct Options {
     /// Serve Prometheus metrics at `GET /metrics` on this address (plain
     /// HTTP, no token).
     pub metrics_listen: Option<SocketAddr>,
+    /// Serve the HTTP/JSON gateway on this address (same tokens and TLS
+    /// as gRPC).
+    pub http_listen: Option<SocketAddr>,
     /// TLS for the gRPC listener.
     pub tls: Option<Tls>,
     /// A bearer token every call must carry.
@@ -123,6 +128,7 @@ impl Options {
             runtime: RuntimeOptions::new(data_dir, seeds),
             listen,
             metrics_listen: None,
+            http_listen: None,
             tls: None,
             token: None,
             admin_token: None,
@@ -170,6 +176,9 @@ pub struct Running {
     /// Where `/metrics` is served, when [`Options::metrics_listen`] was
     /// set.
     pub metrics_addr: Option<SocketAddr>,
+    /// Where the HTTP/JSON gateway is served, when
+    /// [`Options::http_listen`] was set.
+    pub http_addr: Option<SocketAddr>,
     /// Reads the projections in process.
     pub handle: facet::Handle,
     /// The runtime.
@@ -177,6 +186,7 @@ pub struct Running {
     cancel: CancellationToken,
     server: JoinHandle<Result<(), tonic::transport::Error>>,
     metrics_server: Option<JoinHandle<()>>,
+    http_server: Option<JoinHandle<()>>,
     live: JoinHandle<()>,
 }
 
@@ -187,6 +197,9 @@ impl Running {
         let _ = self.server.await;
         if let Some(m) = self.metrics_server {
             let _ = m.await;
+        }
+        if let Some(h) = self.http_server {
+            let _ = h.await;
         }
         self.live.abort();
         self.runtime.shutdown().await?;
@@ -236,18 +249,45 @@ pub async fn serve(app: App, opts: Options) -> anyhow::Result<Running> {
             .collect::<Vec<_>>(),
     );
     let n = opts.max_message_bytes;
+    let query_svc = Arc::new(query_svc::QueryService::new(ctx.clone()));
+    let admin_svc = Arc::new(admin_svc::AdminService::new(ctx.clone()));
     let query = InterceptedService::new(
-        QueryServer::new(query_svc::QueryService::new(ctx.clone()))
+        QueryServer::from_arc(query_svc.clone())
             .max_decoding_message_size(n)
             .max_encoding_message_size(n),
         bearer.clone(),
     );
     let admin = InterceptedService::new(
-        AdminServer::new(admin_svc::AdminService::new(ctx.clone()))
+        AdminServer::from_arc(admin_svc.clone())
             .max_decoding_message_size(n)
             .max_encoding_message_size(n),
-        bearer,
+        bearer.clone(),
     );
+    let (http_addr, http_server) = match opts.http_listen {
+        Some(addr) => {
+            if !addr.ip().is_loopback() && opts.token.is_none() && opts.tls.is_none() {
+                tracing::warn!(%addr, "the HTTP gateway listens beyond loopback with no token and no TLS");
+            }
+            let tls = match &opts.tls {
+                Some(t) => Some(http::rustls_config(t).context("http tls")?),
+                None => None,
+            };
+            let l = TcpListener::bind(addr)
+                .await
+                .with_context(|| format!("cannot listen on {addr} for the HTTP gateway"))?;
+            let local = l.local_addr()?;
+            let router = http::router(
+                query_svc.clone(),
+                admin_svc.clone(),
+                metrics.clone(),
+                bearer.clone(),
+                opts.request_timeout,
+            );
+            let task = tokio::spawn(http::serve(l, router, tls, cancel.clone()));
+            (Some(local), Some(task))
+        }
+        None => (None, None),
+    };
     let (health, health_svc) = tonic_health::server::health_reporter();
     health
         .set_serving::<QueryServer<query_svc::QueryService>>()
@@ -296,11 +336,13 @@ pub async fn serve(app: App, opts: Options) -> anyhow::Result<Running> {
     Ok(Running {
         local_addr,
         metrics_addr,
+        http_addr,
         handle,
         runtime,
         cancel,
         server,
         metrics_server,
+        http_server,
         live,
     })
 }

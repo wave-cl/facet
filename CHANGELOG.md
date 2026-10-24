@@ -94,6 +94,26 @@ crates share one version.
   fatal flag, calls by method and code, durations, open streams,
   watchers. `facetd::testing::Fixture` (feature `test-util`) starts a
   chrond and a facetd for tests.
+- The HTTP/JSON gateway on `--http-listen` (same tokens and TLS as
+  gRPC): `GET /v1/status`, `/v1/projections`, `/v1/projections/{p}`,
+  `/v1/projections/{p}/dead-letters`, `POST .../rebuild`, `/pause`,
+  `/resume`, `DELETE /v1/projections/{p}`, and per collection `get`,
+  `scan`, `lookup`, `range`, `top`, `buckets` and an SSE `watch`; keys
+  and cursors as query parameters (cursors base64); errors as
+  `{"error", "code", ...}` with the status metadata, a read whose
+  `at_least` was not reached answering 504 with the checkpoint;
+  `/openapi.json` documents every route (a unit test checks the two
+  agree); `facet_http_requests_total{route,status}`.
+
+### facet-cli
+
+- The `facet` binary: `get`, `scan`, `lookup`, `range`, `top`,
+  `buckets`, `watch`, `projections [NAME]`, `dead-letters`, `rebuild`,
+  `pause`, `resume`, `drop`, `status [--max-lag]` (exit 1 when a
+  projection is failed, paused or orphaned, lags past the bound, a
+  source is disconnected or the runtime is fatal), `health`; `--addr`,
+  `--token`, `--admin-token`, TLS flags, `--json`; exit 1 for a refusal,
+  2 for usage or an unreachable daemon.
 
 ### facet-client
 

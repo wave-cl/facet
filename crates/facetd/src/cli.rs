@@ -58,6 +58,9 @@ pub struct Cli {
     /// Serve Prometheus metrics at `GET /metrics` here (plain HTTP).
     #[arg(long, env = "FACET_METRICS_LISTEN")]
     pub metrics_listen: Option<SocketAddr>,
+    /// Serve the HTTP/JSON gateway here (same tokens and TLS as gRPC).
+    #[arg(long, env = "FACET_HTTP_LISTEN")]
+    pub http_listen: Option<SocketAddr>,
     /// Serve TLS with this certificate (PEM), with `--tls-key`.
     #[arg(long, env = "FACET_TLS_CERT", requires = "tls_key")]
     pub tls_cert: Option<PathBuf>,
@@ -176,6 +179,7 @@ impl Cli {
                 facet::Fsync::Always
             }));
         opts.metrics_listen = self.metrics_listen;
+        opts.http_listen = self.http_listen;
         opts.tls = match (&self.tls_cert, &self.tls_key) {
             (Some(c), Some(k)) => Some(Tls {
                 cert_pem: read_pem("TLS certificate", c)?,
